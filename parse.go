@@ -68,8 +68,12 @@ var banPatterns = []banPattern{
 		func(m []string) BanEvent {
 			return BanEvent{Action: "KLINE", Target: m[2] + "@" + m[3], Server: m[4], Reason: m[5], IssuedBy: m[1]}
 		}},
-	// "<oper> added temporary <n> min. K-Line for [<user>@<host>] [<reason>]" (local, no explicit server target)
-	{"KLINE", regexp.MustCompile(`^(\S+) added temporary (\d+) min\. K-Line for \[([^@\]]+)@([^\]]+)\] \[(.*)\]$`),
+	// "<oper> added [global|temporary] <n> min. K-Line for [<user>@<host>] [<reason>]"
+	// (local, no explicit server target -- this network's cnircd fork
+	// says "global" here for a normally-propagated ban, confirmed live
+	// 2026-08-23 against upstream solanum's plain "temporary", a real
+	// divergence caught by testing rather than assumed from source).
+	{"KLINE", regexp.MustCompile(`^(\S+) added (?:global |temporary )?(\d+) min\. K-Line for \[([^@\]]+)@([^\]]+)\] \[(.*)\]$`),
 		func(m []string) BanEvent {
 			return BanEvent{Action: "KLINE", Target: m[3] + "@" + m[4], DurationMin: atoiOr0(m[2]), Reason: m[5], IssuedBy: m[1]}
 		}},
@@ -79,9 +83,20 @@ var banPatterns = []banPattern{
 			return BanEvent{Action: "KLINE", Target: m[2] + "@" + m[3], Reason: m[4], IssuedBy: m[1]}
 		}},
 	// "<oper> is removing the K-Line for [<user>@<host>] on <server>"
+	// (vanilla upstream wording, kept in case any code path still uses
+	// it -- not confirmed live on this network, see the pattern below.)
 	{"UNKLINE", regexp.MustCompile(`^(\S+) is removing the K-Line for \[([^@\]]+)@([^\]]+)\] on (\S+)`),
 		func(m []string) BanEvent {
 			return BanEvent{Action: "UNKLINE", Target: m[2] + "@" + m[3], Server: m[4], IssuedBy: m[1]}
+		}},
+	// "<oper> has removed the [global ]K-Line for: [<user>@<host>]" --
+	// this network's cnircd fork's real wording (confirmed live
+	// 2026-08-23: past tense "has removed"/"for:", not upstream's
+	// present-continuous "is removing"/"on <server>" -- matches the
+	// DLINE/RESV removal style instead).
+	{"UNKLINE", regexp.MustCompile(`^(\S+) has removed the (?:global )?K-Line for: \[([^@\]]+)@([^\]]+)\]`),
+		func(m []string) BanEvent {
+			return BanEvent{Action: "UNKLINE", Target: m[2] + "@" + m[3], IssuedBy: m[1]}
 		}},
 
 	// --- DLINE ---
@@ -112,7 +127,12 @@ var banPatterns = []banPattern{
 		func(m []string) BanEvent {
 			return BanEvent{Action: "XLINE", Target: m[2], Server: m[3], Reason: m[4], IssuedBy: m[1]}
 		}},
-	// "<oper> added X-Line for [<mask>] [<reason>]" (local)
+	// "<oper> added [global|temporary] <n> min. X-Line for [<mask>] [<reason>]" (local, temp)
+	{"XLINE", regexp.MustCompile(`^(\S+) added (?:global |temporary )?(\d+) min\. X-Line for \[([^\]]+)\] \[(.*)\]$`),
+		func(m []string) BanEvent {
+			return BanEvent{Action: "XLINE", Target: m[3], DurationMin: atoiOr0(m[2]), Reason: m[4], IssuedBy: m[1]}
+		}},
+	// "<oper> added X-Line for [<mask>] [<reason>]" (local, permanent)
 	{"XLINE", regexp.MustCompile(`^(\S+) added X-Line for \[([^\]]+)\] \[(.*)\]$`),
 		func(m []string) BanEvent {
 			return BanEvent{Action: "XLINE", Target: m[2], Reason: m[3], IssuedBy: m[1]}
@@ -126,6 +146,14 @@ var banPatterns = []banPattern{
 	{"UNXLINE", regexp.MustCompile(`^(\S+) is removing the X-Line for \[([^\]]+)\] on (.+)$`),
 		func(m []string) BanEvent {
 			return BanEvent{Action: "UNXLINE", Target: m[2], Server: strings.TrimSuffix(m[3], "."), IssuedBy: m[1]}
+		}},
+	// "<oper> has removed the [global ]X-Line for: [<mask>]" -- same
+	// past-tense rewrite this fork applies to UNKLINE, see that
+	// pattern's own comment; added defensively on the same precedent,
+	// then confirmed live 2026-08-23.
+	{"UNXLINE", regexp.MustCompile(`^(\S+) has removed the (?:global )?X-Line for: \[([^\]]+)\]`),
+		func(m []string) BanEvent {
+			return BanEvent{Action: "UNXLINE", Target: m[2], IssuedBy: m[1]}
 		}},
 
 	// --- RESV (nick/channel reservation) ---
