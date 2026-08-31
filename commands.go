@@ -34,8 +34,8 @@ var helpLines = []string{
 	"  KCHECK <query> -- search recorded bans/kills by nick, host, IP, mask, reason, or issuing oper (substring match).",
 	"  KCHECK * -- list the whole audit trail, most recent first, when you don't have a nick/host/ip to search for.",
 	"  KCHECK <query> -N -- page through results starting at entry N (1-based), same convention as K9's ACCESS/LASTCMDS.",
-	"  JOIN <#channel> -- has Cerberus join a channel (e.g. to watch/answer KCHECK somewhere besides its home channel).",
-	"  PART <#channel> -- has Cerberus leave a channel. Refuses its own configured home channel -- that's where it lives.",
+	"  JOIN <#channel> -- has Cerberus join a channel (e.g. to watch/answer KCHECK somewhere besides its home channel). Persisted -- survives a reconnect.",
+	"  PART <#channel> -- has Cerberus leave a channel, un-persisting it too. Refuses its own configured home channel -- that's where it lives.",
 	"  HELP -- this message.",
 }
 
@@ -113,7 +113,10 @@ func (b *Bot) finishPending(account string) {
 	switch p.kind {
 	case "JOIN":
 		b.send("JOIN " + p.query)
-		b.send(fmt.Sprintf("NOTICE %s :Joined %s.", p.nick, p.query))
+		if err := b.addExtraChannel(p.query); err != nil {
+			logf("persisting JOIN %s failed: %v", p.query, err)
+		}
+		b.send(fmt.Sprintf("NOTICE %s :Joined %s (persisted -- I'll rejoin it on reconnect too).", p.nick, p.query))
 		logf("%s had Cerberus JOIN %s", account, p.query)
 	case "PART":
 		// Refuses the bot's own configured home channel -- that's
@@ -126,6 +129,9 @@ func (b *Bot) finishPending(account string) {
 			return
 		}
 		b.send("PART " + p.query)
+		if err := b.removeExtraChannel(p.query); err != nil {
+			logf("un-persisting PART %s failed: %v", p.query, err)
+		}
 		b.send(fmt.Sprintf("NOTICE %s :Left %s.", p.nick, p.query))
 		logf("%s had Cerberus PART %s", account, p.query)
 	case "kcheck":

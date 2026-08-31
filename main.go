@@ -121,6 +121,21 @@ type Bot struct {
 	pending *pendingRequest
 }
 
+// rejoinExtraChannels replays every JOIN a command persisted (see
+// commands.go's finishPending "JOIN" case) -- the bot's own home
+// channel is rejoined unconditionally above and never stored here, so
+// this only ever touches channels an admin explicitly added.
+func (b *Bot) rejoinExtraChannels() {
+	channels, err := b.loadExtraChannels()
+	if err != nil {
+		logf("loading extra channels failed: %v", err)
+		return
+	}
+	for _, ch := range channels {
+		b.send("JOIN " + ch)
+	}
+}
+
 func logf(format string, args ...interface{}) {
 	log.Printf(format, args...)
 }
@@ -246,6 +261,7 @@ func (b *Bot) dispatch(l Line) {
 		b.send(fmt.Sprintf("OPER %s %s", b.cfg.OperNick, b.cfg.OperPassword))
 		b.send("JOIN " + b.cfg.Channel)
 		logf("registered, joined %s, opering up as %s", b.cfg.Channel, b.cfg.OperNick)
+		b.rejoinExtraChannels()
 
 	case "381": // RPL_YOUREOPER
 		// +s enables server-notice reception; the second parameter is
