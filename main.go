@@ -94,8 +94,18 @@ func (cfg Config) isAdmin(account string) bool {
 	return false
 }
 
-type pendingKcheck struct {
+// pendingRequest covers every admin command that needs a WHOIS-based
+// account check before it runs -- KCHECK originally, JOIN/PART added
+// 2026-08-31. `kind` picks which one `finishPending` actually does;
+// `query`/`offset` are only meaningful for "kcheck" (the search string
+// and page offset), `query` alone (a bare channel name) for "join"/
+// "part". One shared struct rather than a union of types since Go has
+// no sum types and this bot only ever has ONE request in flight at a
+// time anyway (see the 30s staleness check in `startKcheck`/
+// `startJoinPart`).
+type pendingRequest struct {
 	nick      string
+	kind      string
 	query     string
 	offset    int
 	createdAt time.Time
@@ -108,7 +118,7 @@ type Bot struct {
 
 	saslDone bool
 
-	pending *pendingKcheck
+	pending *pendingRequest
 }
 
 func logf(format string, args ...interface{}) {
@@ -259,12 +269,12 @@ func (b *Bot) dispatch(l Line) {
 
 	case "330": // RPL_WHOISACCOUNT: <me> <nick> <account> :is logged in as
 		if b.pending != nil && len(l.Params) >= 3 && strings.EqualFold(l.Params[1], b.pending.nick) {
-			b.finishKcheck(l.Params[2])
+			b.finishPending(l.Params[2])
 		}
 
 	case "318": // RPL_ENDOFWHOIS -- fallback if 330 never arrived (not identified)
 		if b.pending != nil && len(l.Params) >= 2 && strings.EqualFold(l.Params[1], b.pending.nick) {
-			b.finishKcheck("")
+			b.finishPending("")
 		}
 	}
 }

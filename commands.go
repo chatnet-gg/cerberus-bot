@@ -19,6 +19,10 @@ func (b *Bot) handlePrivate(nick, text string) {
 	switch {
 	case strings.EqualFold(fields[0], "KCHECK"):
 		b.startKcheck(nick, fields[1:])
+	case strings.EqualFold(fields[0], "JOIN"):
+		b.startJoinPart(nick, "JOIN", fields[1:])
+	case strings.EqualFold(fields[0], "PART"):
+		b.startJoinPart(nick, "PART", fields[1:])
 	case strings.EqualFold(fields[0], "HELP"):
 		b.handleHelp(nick)
 	}
@@ -30,6 +34,8 @@ var helpLines = []string{
 	"  KCHECK <query> -- search recorded bans/kills by nick, host, IP, mask, reason, or issuing oper (substring match).",
 	"  KCHECK * -- list the whole audit trail, most recent first, when you don't have a nick/host/ip to search for.",
 	"  KCHECK <query> -N -- page through results starting at entry N (1-based), same convention as K9's ACCESS/LASTCMDS.",
+	"  JOIN <#channel> -- has Cerberus join a channel (e.g. to watch/answer KCHECK somewhere besides its home channel).",
+	"  PART <#channel> -- has Cerberus leave a channel. Refuses its own configured home channel -- that's where it lives.",
 	"  HELP -- this message.",
 }
 
@@ -68,16 +74,34 @@ func (b *Bot) startKcheck(nick string, args []string) {
 		return
 	}
 
-	b.pending = &pendingKcheck{nick: nick, query: strings.Join(args, " "), offset: offset, createdAt: time.Now()}
+	b.pending = &pendingRequest{nick: nick, kind: "kcheck", query: strings.Join(args, " "), offset: offset, createdAt: time.Now()}
 	b.send("WHOIS " + nick)
 }
 
-// finishKcheck runs once dispatch's "330"/"318" cases resolve the
+// startJoinPart mirrors startKcheck's own shape exactly (syntax check,
+// one-at-a-time staleness guard, defer to a WHOIS round-trip) -- see
+// that function's comments for why the account check can't happen
+// synchronously here.
+func (b *Bot) startJoinPart(nick, kind string, args []string) {
+	if len(args) != 1 || !strings.HasPrefix(args[0], "#") {
+		b.send(fmt.Sprintf("NOTICE %s :Syntax: %s <#channel>", nick, kind))
+		return
+	}
+	if b.pending != nil && time.Since(b.pending.createdAt) < 30*time.Second {
+		b.send(fmt.Sprintf("NOTICE %s :Already processing a request, try again shortly.", nick))
+		return
+	}
+	b.pending = &pendingRequest{nick: nick, kind: kind, query: args[0], createdAt: time.Now()}
+	b.send("WHOIS " + nick)
+}
+
+// finishPending runs once dispatch's "330"/"318" cases resolve the
 // requester's NickServ account (or confirm they have none) -- same
 // WHOIS-verified-as-admin gate as every other bot in this project (real
 // account read authoritatively off the ircd, not trusted from anything
-// the sender claimed about themselves).
-func (b *Bot) finishKcheck(account string) {
+// the sender claimed about themselves). Covers every command kind
+// startKcheck/startJoinPart can stage into `b.pending`.
+func (b *Bot) finishPending(account string) {
 	p := b.pending
 	b.pending = nil
 
@@ -86,6 +110,30 @@ func (b *Bot) finishKcheck(account string) {
 		return
 	}
 
+	switch p.kind {
+	case "JOIN":
+		b.send("JOIN " + p.query)
+		b.send(fmt.Sprintf("NOTICE %s :Joined %s.", p.nick, p.query))
+		logf("%s had Cerberus JOIN %s", account, p.query)
+	case "PART":
+		// Refuses the bot's own configured home channel -- that's
+		// where it lives (rejoined on every reconnect via the "001"
+		// handler regardless), and parting it via this command would
+		// just look broken rather than do anything useful: the very
+		// next reconnect walks straight back in.
+		if strings.EqualFold(p.query, b.cfg.Channel) {
+			b.send(fmt.Sprintf("NOTICE %s :Not leaving %s -- that's my home channel.", p.nick, p.query))
+			return
+		}
+		b.send("PART " + p.query)
+		b.send(fmt.Sprintf("NOTICE %s :Left %s.", p.nick, p.query))
+		logf("%s had Cerberus PART %s", account, p.query)
+	case "kcheck":
+		b.runKcheck(p)
+	}
+}
+
+func (b *Bot) runKcheck(p *pendingRequest) {
 	records, err := b.searchBans(p.query, kcheckResultLimit, p.offset)
 	if err != nil {
 		logf("kcheck query failed: %v", err)
