@@ -38,6 +38,9 @@ All via `/msg Cerberus <command>`, admin-only (WHOIS-verified against
 
 - `KCHECK <nick|host|ip|mask|text>` -- substring search across every
   recorded ban/kill's target, reason, and issuing oper.
+- `KCHECK *` -- the whole audit trail, most recent first.
+- `KCHECK <query> -N` -- ten entries at a time: a full page ends with the
+  exact command for the next one (`KCHECK * -11`, `KCHECK * -21`, ...).
 - `HELP`
 
 ## License

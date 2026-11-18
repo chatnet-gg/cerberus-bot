@@ -71,17 +71,31 @@ type BanRecord struct {
 // history" (the common case); a query like "search by CIDR range" would
 // need proper inet-typed columns and a <<= comparison instead, not
 // implemented here yet.
-func (b *Bot) searchBans(query string, limit int) ([]BanRecord, error) {
-	rows, err := b.db.Query(
-		`SELECT id, action, target, server, duration_minutes, reason, issued_by, created_at
-		 FROM bans
-		 WHERE target ILIKE '%' || $1 || '%'
-		    OR reason ILIKE '%' || $1 || '%'
-		    OR issued_by ILIKE '%' || $1 || '%'
-		 ORDER BY created_at DESC
-		 LIMIT $2`,
-		query, limit,
-	)
+// searchBans returns one page of matching records, most recent first,
+// skipping offset entries. The query "*" matches everything.
+func (b *Bot) searchBans(query string, limit, offset int) ([]BanRecord, error) {
+	var rows *sql.Rows
+	var err error
+	if query == "*" {
+		rows, err = b.db.Query(
+			`SELECT id, action, target, server, duration_minutes, reason, issued_by, created_at
+			 FROM bans
+			 ORDER BY created_at DESC
+			 LIMIT $1 OFFSET $2`,
+			limit, offset,
+		)
+	} else {
+		rows, err = b.db.Query(
+			`SELECT id, action, target, server, duration_minutes, reason, issued_by, created_at
+			 FROM bans
+			 WHERE target ILIKE '%' || $1 || '%'
+			    OR reason ILIKE '%' || $1 || '%'
+			    OR issued_by ILIKE '%' || $1 || '%'
+			 ORDER BY created_at DESC
+			 LIMIT $2 OFFSET $3`,
+			query, limit, offset,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}

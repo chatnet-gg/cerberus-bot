@@ -97,6 +97,7 @@ func (cfg Config) isAdmin(account string) bool {
 type pendingKcheck struct {
 	nick      string
 	query     string
+	offset    int // entries to skip, from a trailing "-N" argument
 	createdAt time.Time
 }
 
