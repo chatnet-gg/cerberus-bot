@@ -41,6 +41,10 @@ All via `/msg Cerberus <command>`, admin-only (WHOIS-verified against
 - `KCHECK *` -- the whole audit trail, most recent first.
 - `KCHECK <query> -N` -- ten entries at a time: a full page ends with the
   exact command for the next one (`KCHECK * -11`, `KCHECK * -21`, ...).
+- `JOIN <#channel>` / `PART <#channel>` -- have Cerberus join or leave a
+  channel, for example to answer `KCHECK` somewhere besides its home
+  channel. Joined channels are stored in the database and rejoined after a
+  reconnect; `PART` forgets them again and refuses to leave the home channel.
 - `HELP`
 
 ## License

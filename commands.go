@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,10 @@ func (b *Bot) handlePrivate(nick, text string) {
 	switch {
 	case strings.EqualFold(fields[0], "KCHECK"):
 		b.startKcheck(nick, fields[1:])
+	case strings.EqualFold(fields[0], "JOIN"):
+		b.startJoinPart(nick, "JOIN", fields[1:])
+	case strings.EqualFold(fields[0], "PART"):
+		b.startJoinPart(nick, "PART", fields[1:])
 	case strings.EqualFold(fields[0], "HELP"):
 		b.handleHelp(nick)
 	}
@@ -30,6 +35,8 @@ var helpLines = []string{
 	"  KCHECK <query> -- search recorded bans/kills by nick, host, IP, mask, reason, or issuing oper (substring match).",
 	"  KCHECK * -- list the whole audit trail, most recent first, when you have nothing specific to search for.",
 	"  KCHECK <query> -N -- page through the results starting at entry N (1-based), e.g. KCHECK * -11 for the second page.",
+	"  JOIN <#channel> -- have Cerberus join a channel, for instance to answer KCHECK somewhere besides its home channel. Remembered: it rejoins after a reconnect.",
+	"  PART <#channel> -- have Cerberus leave a channel and forget it. It refuses to leave its own home channel.",
 	"  HELP -- this message.",
 }
 
@@ -70,7 +77,7 @@ func (b *Bot) startKcheck(nick string, args []string) {
 		b.send(fmt.Sprintf("NOTICE %s :Already processing a request, try again shortly.", nick))
 		return
 	}
-	b.pending = &pendingKcheck{nick: nick, query: strings.Join(args, " "), offset: offset, createdAt: time.Now()}
+	b.pending = &pendingRequest{nick: nick, kind: "kcheck", query: strings.Join(args, " "), offset: offset, createdAt: time.Now()}
 	b.send("WHOIS " + nick)
 }
 
@@ -79,7 +86,24 @@ func (b *Bot) startKcheck(nick string, args []string) {
 // WHOIS-verified-as-admin gate as every other bot in this project (real
 // account read authoritatively off the ircd, not trusted from anything
 // the sender claimed about themselves).
-func (b *Bot) finishKcheck(account string) {
+// channelNameRe is what JOIN/PART accept: a # channel, no spaces, commas
+// (which would be several channels) or bell characters.
+var channelNameRe = regexp.MustCompile(`^#[^\s,\x07]{1,49}$`)
+
+func (b *Bot) startJoinPart(nick, kind string, args []string) {
+	if len(args) != 1 || !channelNameRe.MatchString(args[0]) {
+		b.send(fmt.Sprintf("NOTICE %s :Syntax: %s <#channel>", nick, kind))
+		return
+	}
+	if b.pending != nil && time.Since(b.pending.createdAt) < 30*time.Second {
+		b.send(fmt.Sprintf("NOTICE %s :Already processing a request, try again shortly.", nick))
+		return
+	}
+	b.pending = &pendingRequest{nick: nick, kind: kind, query: args[0], createdAt: time.Now()}
+	b.send("WHOIS " + nick)
+}
+
+func (b *Bot) finishPending(account string) {
 	p := b.pending
 	b.pending = nil
 
@@ -88,6 +112,33 @@ func (b *Bot) finishKcheck(account string) {
 		return
 	}
 
+	switch p.kind {
+	case "JOIN":
+		b.send("JOIN " + p.query)
+		if err := b.addExtraChannel(p.query); err != nil {
+			logf("remembering JOIN %s failed: %v", p.query, err)
+		}
+		b.send(fmt.Sprintf("NOTICE %s :Joined %s (remembered: I rejoin it after a reconnect).", p.nick, p.query))
+		logf("%s had Cerberus JOIN %s", account, p.query)
+	case "PART":
+		// The home channel is rejoined on every connect anyway, so leaving
+		// it here would only look broken.
+		if strings.EqualFold(p.query, b.cfg.Channel) {
+			b.send(fmt.Sprintf("NOTICE %s :Not leaving %s -- that is my home channel.", p.nick, p.query))
+			return
+		}
+		b.send("PART " + p.query)
+		if err := b.removeExtraChannel(p.query); err != nil {
+			logf("forgetting PART %s failed: %v", p.query, err)
+		}
+		b.send(fmt.Sprintf("NOTICE %s :Left %s.", p.nick, p.query))
+		logf("%s had Cerberus PART %s", account, p.query)
+	case "kcheck":
+		b.runKcheck(p)
+	}
+}
+
+func (b *Bot) runKcheck(p *pendingRequest) {
 	records, err := b.searchBans(p.query, kcheckResultLimit, p.offset)
 	if err != nil {
 		logf("kcheck query failed: %v", err)

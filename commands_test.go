@@ -42,3 +42,16 @@ func TestNextPageHint(t *testing.T) {
 		t.Errorf("second page hint = %q", h)
 	}
 }
+
+func TestChannelNameRe(t *testing.T) {
+	for _, ok := range []string{"#chatnet", "#a", "#Some-Channel_1", "#ops!"} {
+		if !channelNameRe.MatchString(ok) {
+			t.Errorf("%q should be accepted", ok)
+		}
+	}
+	for _, bad := range []string{"", "chatnet", "#", "#two words", "#a,#b", "#bell\x07", "&local", "#" + string(make([]byte, 60))} {
+		if channelNameRe.MatchString(bad) {
+			t.Errorf("%q must be refused", bad)
+		}
+	}
+}

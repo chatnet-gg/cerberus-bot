@@ -94,8 +94,13 @@ func (cfg Config) isAdmin(account string) bool {
 	return false
 }
 
-type pendingKcheck struct {
+// pendingRequest is an admin command waiting for the WHOIS that tells which
+// account the sender is logged in to. kind picks what finishPending does:
+// "kcheck" (query and offset are the search and the page) or "JOIN"/"PART"
+// (query is the channel). The bot has only one request in flight at a time.
+type pendingRequest struct {
 	nick      string
+	kind      string
 	query     string
 	offset    int // entries to skip, from a trailing "-N" argument
 	createdAt time.Time
@@ -108,7 +113,7 @@ type Bot struct {
 
 	saslDone bool
 
-	pending *pendingKcheck
+	pending *pendingRequest
 }
 
 func logf(format string, args ...interface{}) {
@@ -177,6 +182,19 @@ func (b *Bot) connectAndRun() error {
 	}
 }
 
+// rejoinExtraChannels joins the channels added with JOIN, after every
+// (re)connect; the home channel is joined separately.
+func (b *Bot) rejoinExtraChannels() {
+	channels, err := b.loadExtraChannels()
+	if err != nil {
+		logf("loading extra channels failed: %v", err)
+		return
+	}
+	for _, ch := range channels {
+		b.send("JOIN " + ch)
+	}
+}
+
 func (b *Bot) send(s string) {
 	if b.conn == nil {
 		return
@@ -236,6 +254,7 @@ func (b *Bot) dispatch(l Line) {
 		b.send(fmt.Sprintf("OPER %s %s", b.cfg.OperNick, b.cfg.OperPassword))
 		b.send("JOIN " + b.cfg.Channel)
 		logf("registered, joined %s, opering up as %s", b.cfg.Channel, b.cfg.OperNick)
+		b.rejoinExtraChannels()
 
 	case "381": // RPL_YOUREOPER
 		// +s enables server-notice reception; the second parameter is
@@ -259,12 +278,12 @@ func (b *Bot) dispatch(l Line) {
 
 	case "330": // RPL_WHOISACCOUNT: <me> <nick> <account> :is logged in as
 		if b.pending != nil && len(l.Params) >= 3 && strings.EqualFold(l.Params[1], b.pending.nick) {
-			b.finishKcheck(l.Params[2])
+			b.finishPending(l.Params[2])
 		}
 
 	case "318": // RPL_ENDOFWHOIS -- fallback if 330 never arrived (not identified)
 		if b.pending != nil && len(l.Params) >= 2 && strings.EqualFold(l.Params[1], b.pending.nick) {
-			b.finishKcheck("")
+			b.finishPending("")
 		}
 	}
 }

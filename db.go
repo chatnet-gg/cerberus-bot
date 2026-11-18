@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS bans (
 CREATE INDEX IF NOT EXISTS idx_bans_target ON bans (target);
 CREATE INDEX IF NOT EXISTS idx_bans_issued_by ON bans (issued_by);
 CREATE INDEX IF NOT EXISTS idx_bans_created_at ON bans (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS extra_channels (
+	channel TEXT PRIMARY KEY
+);
 `
 
 func openDB(dsn string) (*sql.DB, error) {
@@ -49,6 +53,36 @@ func (b *Bot) recordBan(ev BanEvent, raw string) {
 	if err != nil {
 		logf("db insert failed: %v", err)
 	}
+}
+
+// addExtraChannel remembers a channel the bot was told to join, so that it
+// is rejoined on every reconnect. A repeated JOIN is a harmless no-op.
+func (b *Bot) addExtraChannel(channel string) error {
+	_, err := b.db.Exec(`INSERT INTO extra_channels (channel) VALUES ($1) ON CONFLICT DO NOTHING`, channel)
+	return err
+}
+
+func (b *Bot) removeExtraChannel(channel string) error {
+	_, err := b.db.Exec(`DELETE FROM extra_channels WHERE channel = $1`, channel)
+	return err
+}
+
+func (b *Bot) loadExtraChannels() ([]string, error) {
+	rows, err := b.db.Query(`SELECT channel FROM extra_channels ORDER BY channel`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var ch string
+		if err := rows.Scan(&ch); err != nil {
+			return nil, err
+		}
+		out = append(out, ch)
+	}
+	return out, rows.Err()
 }
 
 // BanRecord is one row as returned to a search, with its DB-assigned id
